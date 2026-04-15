@@ -1,0 +1,314 @@
+---
+title: "The Invisible Generation"
+subtitle: "Youth mortality and school attendance as mirrors of global inequality"
+author: "Rohith Ramesh"
+date: today
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    theme: darkly
+    toc: true
+    toc-title: "Contents"
+execute:
+  warning: false
+  error: false
+  echo: true
+---
+
+## Introduction
+
+Across the developing world, **the countries where children cannot access school are the same countries where young people aged 15–24 die at the highest rates**. This is not coincidence — it is the geometry of inequality.
+
+Using UNICEF data on *youth mortality* and *primary school attendance*, combined with World Bank economic indicators, this report tells the story of a generation left behind. The data spans **1990 to 2022** and covers countries across every continent.
+
+Key findings:
+
+- **Sub-Saharan Africa** carries a disproportionate burden of both youth mortality and school exclusion
+- **Males** consistently face higher mortality rates than females across all regions
+- Countries with **lower GDP per capita** have significantly lower school attendance rates
+- Despite global progress, the gap between rich and poor nations **remains stark**
+
+---
+
+## Data Loading
+
+```{python}
+#| label: load-data
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import polars as pl
+import pandas as pd
+from plotnine import *
+
+ind1 = pl.read_csv("unicef_indicator_1.csv")
+ind2 = pl.read_csv("unicef_indicator_2.csv")
+meta = pl.read_csv("unicef_metadata.csv")
+
+print("Indicator 1 (Youth Mortality):", ind1.shape)
+print("Indicator 2 (School Attendance):", ind2.shape)
+print("Metadata (World Bank):", meta.shape)
+```
+
+---
+
+## Data Transformations
+
+```{python}
+#| label: transform-data
+
+# Filter mortality for Total sex only, rename columns
+mortality = (
+    ind1
+    .filter(pl.col("sex") == "Total")
+    .rename({"obs_value": "mortality_rate", "time_period": "year"})
+)
+
+# Filter attendance for Total sex only
+attendance = (
+    ind2
+    .filter(pl.col("sex") == "Total")
+    .rename({"obs_value": "attendance_rate", "time_period": "year"})
+)
+
+# Clean metadata - rename GDP column
+meta2 = meta.rename({
+    "GDP per capita (constant 2015 US$)": "gdp_per_capita",
+    "Life expectancy at birth, total (years)": "life_expectancy"
+})
+
+# Join attendance with metadata on country code and year
+attendance_gdp = (
+    attendance
+    .join(
+        meta2.select(["alpha_3_code", "year", "gdp_per_capita"]),
+        on=["alpha_3_code", "year"],
+        how="left"
+    )
+    .drop_nulls(subset=["gdp_per_capita"])
+    .to_pandas()
+)
+
+# Get peak mortality per country for world map
+mortality_latest = (
+    mortality
+    .group_by("country")
+    .agg(pl.col("mortality_rate").max().alias("max_mortality"))
+    .sort("max_mortality", descending=True)
+    .to_pandas()
+)
+
+# Get worst 20 countries for school attendance
+worst_20 = (
+    attendance
+    .group_by("country")
+    .agg(pl.col("attendance_rate").mean().alias("avg_attendance"))
+    .sort("avg_attendance")
+    .head(20)
+    .to_pandas()
+)
+
+# Get trend data by gender for time series
+trend = (
+    ind1
+    .filter(pl.col("sex").is_in(["Male", "Female"]))
+    .rename({"time_period": "year"})
+    .group_by(["year", "sex"])
+    .agg(pl.col("obs_value").mean().alias("avg_mortality"))
+    .sort("year")
+    .to_pandas()
+)
+
+print("Top 10 highest mortality countries:")
+print(mortality_latest.head(10).to_string(index=False))
+```
+
+---
+
+## Chart 1 — World Map of Youth Mortality
+
+*Where do young people die the most? Sub-Saharan Africa and parts of South Asia stand out clearly as hotspots of youth mortality.*
+
+```{python}
+#| label: fig-map
+#| fig-cap: "Peak youth mortality rate by country — bubble size and colour indicate magnitude"
+
+BG = "#0b0f1a"; PAN = "#111827"; CORAL = "#e06b4a"
+BLUE = "#3baed4"; GOLD = "#d4a03b"; TEXT = "#e8e4d9"
+
+country_coords = {
+    "Afghanistan":(67.7,33.9),"Angola":(17.9,-11.2),"Bangladesh":(90.4,23.7),"Benin":(2.3,9.3),
+    "Bolivia":(-64.7,-17.0),"Brazil":(-51.9,-14.2),"Burkina Faso":(-1.6,12.4),"Burundi":(29.9,-3.4),
+    "Cambodia":(104.9,12.6),"Cameroon":(12.4,7.4),"Central African Republic":(20.9,6.6),"Chad":(18.7,15.5),
+    "China":(104.2,35.9),"Colombia":(-74.3,4.1),"Congo":(15.8,-0.2),
+    "Congo, the Democratic Republic of the":(23.7,-2.9),"Djibouti":(42.6,11.8),
+    "Ecuador":(-77.8,-1.8),"Egypt":(30.8,26.8),"Eritrea":(39.8,15.2),
+    "Ethiopia":(40.5,9.1),"Gabon":(11.6,-0.8),"Gambia":(-15.3,13.5),"Ghana":(-1.0,7.9),
+    "Guatemala":(-90.2,15.8),"Guinea":(-11.8,11.0),"Guinea-Bissau":(-14.5,12.0),"Haiti":(-72.3,18.9),
+    "Honduras":(-86.2,15.2),"India":(78.9,20.6),"Indonesia":(113.9,-0.8),"Iraq":(43.7,33.2),
+    "Kenya":(37.9,0.0),"Korea, Republic of":(127.8,36.5),"Lao People's Democratic Republic":(102.5,18.2),
+    "Lesotho":(28.2,-29.6),"Liberia":(-9.4,6.4),"Libya":(17.2,26.3),"Madagascar":(46.9,-19.4),
+    "Malawi":(34.3,-13.2),"Mali":(-2.0,17.6),"Mauritania":(-10.9,21.0),"Mexico":(-102.5,23.6),
+    "Morocco":(-5.9,31.8),"Mozambique":(35.5,-18.7),"Myanmar":(96.7,17.1),"Namibia":(18.5,-22.3),
+    "Nepal":(84.1,28.4),"Nicaragua":(-85.2,12.9),"Niger":(8.1,17.6),"Nigeria":(8.7,9.1),
+    "Pakistan":(69.3,30.4),"Papua New Guinea":(143.9,-6.3),"Paraguay":(-58.4,-23.4),"Peru":(-75.0,-9.2),
+    "Philippines":(122.9,12.9),"Russia":(105.3,61.5),"Rwanda":(29.9,-1.9),"Saudi Arabia":(45.1,23.9),
+    "Senegal":(-14.5,14.5),"Sierra Leone":(-11.8,8.5),"Somalia":(46.2,6.1),"South Africa":(25.1,-29.0),
+    "South Sudan":(31.3,7.9),"Sudan":(29.9,12.9),"Swaziland":(31.5,-26.5),"Syria":(38.0,34.8),
+    "Tanzania":(34.9,-6.4),"Thailand":(100.9,15.9),"Togo":(0.8,8.6),"Turkey":(35.2,39.1),
+    "Turkmenistan":(58.4,40.1),"Uganda":(32.3,1.4),"United States":(-95.7,37.1),
+    "Uzbekistan":(63.9,41.4),"Venezuela":(-66.6,6.4),"Vietnam":(108.3,14.1),
+    "Yemen":(48.5,15.6),"Zambia":(27.8,-13.1),"Zimbabwe":(29.2,-20.0),
+    "Algeria":(3.0,28.0),"Argentina":(-63.6,-38.4),"Australia":(133.8,-25.3),
+    "Canada":(-96.8,56.1),"Chile":(-71.5,-35.7),"France":(2.2,46.2),"Germany":(10.5,51.2),
+    "Iran":(53.7,32.4),"Japan":(138.3,36.2),"Kazakhstan":(66.9,48.0),"Mongolia":(103.8,46.9),
+    "Ukraine":(31.2,49.4),"United Kingdom":(-3.4,55.4)
+}
+
+mort_pd = mortality_latest.copy()
+mort_pd["lon"] = mort_pd["country"].map(lambda x: country_coords.get(x,(None,None))[0])
+mort_pd["lat"] = mort_pd["country"].map(lambda x: country_coords.get(x,(None,None))[1])
+mort_pd = mort_pd.dropna(subset=["lon","lat"])
+
+fig, ax = plt.subplots(1,1,figsize=(14,7),facecolor=BG)
+ax.set_facecolor("#0d1220")
+sc = ax.scatter(mort_pd["lon"],mort_pd["lat"],c=mort_pd["max_mortality"],
+    cmap="YlOrRd",s=mort_pd["max_mortality"]*3,alpha=0.85,edgecolors="none",vmin=0,vmax=70)
+cbar = plt.colorbar(sc,ax=ax,shrink=0.6,pad=0.02)
+cbar.set_label("Deaths per 1,000 youths",color=TEXT,fontsize=10)
+plt.setp(cbar.ax.yaxis.get_ticklabels(),color=TEXT)
+cbar.ax.yaxis.set_tick_params(color=TEXT)
+ax.set_xlim(-180,180); ax.set_ylim(-60,90)
+ax.tick_params(colors=TEXT,labelsize=8)
+for s in ax.spines.values(): s.set_color("#1e2a40")
+ax.grid(color="#1e2a40",linewidth=0.3,alpha=0.5)
+ax.set_title("The Geography of Youth Mortality\nPeak mortality rate, ages 15-24",color=TEXT,fontsize=14,pad=12)
+ax.text(0.5,-0.05,"Source: UNICEF",transform=ax.transAxes,ha="center",color="#4a5568",fontsize=9)
+plt.tight_layout()
+plt.savefig("map.png",dpi=150,bbox_inches="tight",facecolor=BG)
+plt.show()
+plt.close()
+```
+
+---
+
+## Chart 2 — Worst 20 Countries for School Attendance
+
+*South Sudan has a primary school attendance rate of under 25% — the lowest in the world. All 20 of the worst-performing countries are in Sub-Saharan Africa or South Asia.*
+
+```{python}
+#| label: fig-bar
+#| fig-cap: "20 countries with lowest average primary school attendance rate"
+
+(
+    ggplot(worst_20, aes(
+        x="avg_attendance",
+        y="reorder(country, avg_attendance)",
+        fill="avg_attendance"
+    ))
+    + geom_col()
+    + scale_fill_gradient(low=CORAL, high=GOLD)
+    + labs(
+        title="The 20 Countries with Lowest School Attendance",
+        subtitle="Average primary school attendance rate (%)",
+        x="Average Attendance (%)",
+        y="",
+        caption="Source: UNICEF"
+    )
+    + theme_minimal()
+    + theme(
+        plot_background=element_rect(fill=BG),
+        panel_background=element_rect(fill=PAN),
+        text=element_text(color=TEXT),
+        plot_title=element_text(size=13),
+        panel_grid_major_y=element_blank(),
+        legend_position="none"
+    )
+)
+```
+
+---
+
+## Chart 3 — School Attendance vs GDP per Capita
+
+*The relationship between wealth and education is clear — every increase in GDP per capita correlates with higher school attendance. Countries in the bottom-left corner (low GDP, low attendance) are the same ones shown in red on the map above.*
+
+```{python}
+#| label: fig-scatter
+#| fig-cap: "School attendance rate vs GDP per capita with linear regression line"
+
+(
+    ggplot(attendance_gdp, aes(x="gdp_per_capita", y="attendance_rate"))
+    + geom_point(color=CORAL, alpha=0.5, size=2)
+    + geom_smooth(method="lm", color=BLUE)
+    + labs(
+        title="Wealthier Countries Keep More Children in School",
+        subtitle="Primary school attendance rate vs GDP per capita",
+        x="GDP per Capita (USD, constant 2015)",
+        y="School Attendance (%)",
+        caption="Source: UNICEF & World Bank"
+    )
+    + theme_minimal()
+    + theme(
+        plot_background=element_rect(fill=BG),
+        panel_background=element_rect(fill=PAN),
+        text=element_text(color=TEXT),
+        plot_title=element_text(size=13),
+        panel_grid=element_line(color="#1e2a40")
+    )
+)
+```
+
+---
+
+## Chart 4 — Youth Mortality Trend Over Time
+
+*Both male and female youth mortality have declined since 1990 — a genuine global achievement. However, males consistently die at higher rates than females, and this **gender gap has barely closed in 30 years**.*
+
+```{python}
+#| label: fig-timeseries
+#| fig-cap: "Global average youth mortality rate by gender, 1990-2022"
+
+(
+    ggplot(trend, aes(x="year", y="avg_mortality", color="sex"))
+    + geom_line(size=1.5)
+    + geom_point(size=2)
+    + scale_color_manual(
+        values={"Male": CORAL, "Female": BLUE},
+        name=""
+    )
+    + labs(
+        title="Three Decades of Progress — But the Gap Remains",
+        subtitle="Global average youth mortality rate (ages 15-24) by gender",
+        x="Year",
+        y="Avg. Deaths per 1,000 Youths",
+        caption="Source: UNICEF"
+    )
+    + theme_minimal()
+    + theme(
+        plot_background=element_rect(fill=BG),
+        panel_background=element_rect(fill=PAN),
+        text=element_text(color=TEXT),
+        plot_title=element_text(size=13),
+        panel_grid=element_line(color="#1e2a40"),
+        legend_background=element_rect(fill=BG)
+    )
+)
+```
+
+---
+
+## Conclusion
+
+The data tells a consistent and urgent story. **Youth mortality and school exclusion are not random**; they cluster in the same countries, the same regions, driven by the same underlying force: **poverty**.
+
+- *Sub-Saharan Africa* faces the highest mortality and lowest attendance of any region
+- *Wealthier nations* keep children in school and alive longer
+- The **gender gap in mortality** has persisted for over 30 years despite global progress
+- Every percentage point increase in school attendance correlates with lower mortality rates
+
+The children in these statistics are not abstractions. They are real young people aged 15 to 24 — the age of ambition, of possibility, of life just beginning. The countries that fail to keep them in school are the same countries where they die before their time.
+
+> *"The Invisible Generation are not invisible because they don't exist. They are invisible because the world has not yet chosen to see them."*
